@@ -1,0 +1,135 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-primary: #000000;
+    --bg-secondary: #0A0A0A;
+    --bg-tertiary: #141414;
+    --bg-elevated: #1C1C1E;
+    --text-primary: #FFFFFF;
+    --text-secondary: #A1A1A6;
+    --text-tertiary: #636366;
+    --accent: #FF6B35;
+    --accent-glow: rgba(255, 107, 53, 0.4);
+    --success: #30D158;
+    --warning: #FFD60A;
+    --error: #FF453A;
+  }
+
+  * {
+    box-sizing: border-box;
+    padding: 0;
+    margin: 0;
+  }
+
+  html,
+  body {
+    max-width: 100vw;
+    overflow-x: hidden;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Noto Sans JP', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* iOS PWA対応 */
+  body {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* セレクト可能なテキスト */
+  input, textarea, [contenteditable] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+@layer components {
+  /* カード */
+  .card {
+    @apply bg-bg-tertiary rounded-card shadow-card;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.02'/%3E%3C/svg%3E");
+  }
+
+  /* プライマリボタン */
+  .btn-primary {
+    @apply bg-gradient-to-r from-accent to-accent-light text-white font-semibold;
+    @apply py-4 px-8 rounded-button;
+    @apply transition-all duration-200;
+    @apply hover:shadow-glow active:scale-[0.97];
+  }
+
+  /* セカンダリボタン */
+  .btn-secondary {
+    @apply bg-transparent text-text-primary font-semibold;
+    @apply py-4 px-8 rounded-button;
+    @apply border border-white/20 backdrop-blur-md;
+    @apply transition-all duration-200;
+    @apply hover:border-white/40 active:scale-[0.97];
+  }
+
+  /* ゴーストボタン */
+  .btn-ghost {
+    @apply bg-transparent text-text-secondary font-medium;
+    @apply py-2 px-4 rounded-button;
+    @apply transition-all duration-200;
+    @apply hover:text-text-primary hover:bg-white/5;
+  }
+
+  /* 入力フィールド */
+  .input-field {
+    @apply w-full bg-bg-elevated text-text-primary text-lg;
+    @apply py-4 px-5 rounded-button;
+    @apply border-2 border-transparent;
+    @apply transition-all duration-200;
+    @apply focus:outline-none focus:border-accent;
+    @apply placeholder:text-text-tertiary;
+  }
+
+  /* プログレスバー */
+  .progress-bar {
+    @apply h-2 bg-bg-elevated rounded-full overflow-hidden;
+  }
+
+  .progress-bar-fill {
+    @apply h-full bg-accent rounded-full;
+    @apply transition-all duration-500 ease-out;
+  }
+}
+
+@layer utilities {
+  /* グロー効果 */
+  .glow {
+    box-shadow: 0 0 40px var(--accent-glow);
+  }
+
+  /* テキストグラデーション */
+  .text-gradient {
+    @apply bg-gradient-to-r from-accent to-accent-light bg-clip-text text-transparent;
+  }
+
+  /* セーフエリア対応 */
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+
+  .safe-top {
+    padding-top: env(safe-area-inset-top, 0);
+  }
+
+  /* スクロールバー非表示 */
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
