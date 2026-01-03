@@ -55,15 +55,22 @@ export default async function DashboardPage() {
     const dayLogs = (weekLogs || []).filter((log: any) => log.logged_date === date)
     const completed = dayLogs.filter((log: any) => log.completed).length
     const total = todayActions.length || 1
-    const isToday = date === today
     const isFuture = new Date(date) > new Date()
+
+    const status = isFuture
+      ? 'future' as const
+      : completed === total && total > 0
+      ? 'complete' as const
+      : completed > 0
+      ? 'partial' as const
+      : 'none' as const
 
     return {
       date,
       day: ['月', '火', '水', '木', '金', '土', '日'][i],
       completed,
       total,
-      status: isFuture ? 'future' : completed === total && total > 0 ? 'complete' : completed > 0 ? 'partial' : 'none',
+      status,
     }
   })
 
