@@ -1,79 +1,123 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowLeft, Sparkles, Check, X, Plus, Edit2 } from 'lucide-react'
-import { Button, Card, Input } from '@/components/ui'
+import { ArrowLeft, Send, Check, X } from 'lucide-react'
+import { Button, Card } from '@/components/ui'
 import { createClient } from '@/lib/supabase/client'
-import type { AIProposal, ProposedKPI, ProposedAction } from '@/types'
+import type { ProposedKPI } from '@/types'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
 
-type Step = 'input' | 'loading' | 'review' | 'saving'
+interface Message {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+interface GoalAnalysis {
+  refined_title: string
+  motivation: string
+  timeline: string
+}
+
+interface Proposal {
+  ready: boolean
+  goal_analysis?: GoalAnalysis
+  proposed_kpis: ProposedKPI[]
+  message?: string
+}
 
 export default function NewGoalPage() {
   const router = useRouter()
   const supabase = createClient()
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
-  const [step, setStep] = useState<Step>('input')
-  const [title, setTitle] = useState('')
-  const [targetDate, setTargetDate] = useState('')
-  const [proposal, setProposal] = useState<AIProposal | null>(null)
-  const [editingKPI, setEditingKPI] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [messages, setMessages] = useState<Message[]>([])
+  const [inputValue, setInputValue] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [proposal, setProposal] = useState<Proposal | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
+  const [showProposal, setShowProposal] = useState(false)
 
-  const handleSubmitGoal = async () => {
-    if (!title.trim()) return
+  // 初期メッセージ
+  useEffect(() => {
+    setMessages([
+      {
+        role: 'assistant',
+        content: 'こんにちは！目標達成のサポートをさせてください。\n\nまず、達成したい目標を教えてください。どんな小さなことでも大丈夫です。',
+      },
+    ])
+  }, [])
 
-    setStep('loading')
-    setError(null)
+  // メッセージが追加されたらスクロール
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  const handleSend = async () => {
+    if (!inputValue.trim() || isLoading) return
+
+    const userMessage = inputValue.trim()
+    setInputValue('')
+    setMessages((prev) => [...prev, { role: 'user', content: userMessage }])
+    setIsLoading(true)
 
     try {
-      const response = await fetch('/api/ai/decompose', {
+      const allMessages = [...messages, { role: 'user' as const, content: userMessage }]
+
+      const response = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, target_date: targetDate }),
+        body: JSON.stringify({ messages: allMessages.slice(1) }), // 初期メッセージを除く
       })
 
-      if (!response.ok) throw new Error('Failed to get AI proposal')
+      if (!response.ok) throw new Error('Failed to get response')
 
-      const data: AIProposal = await response.json()
+      const data = await response.json()
 
-      // IDを付与
-      data.proposed_kpis = data.proposed_kpis.map((kpi, kIndex) => ({
-        ...kpi,
-        id: `kpi-${kIndex}`,
-        actions: kpi.actions.map((action, aIndex) => ({
-          ...action,
-          id: `action-${kIndex}-${aIndex}`,
-        })),
-      }))
+      // JSONブロックを除いたメッセージを表示
+      const cleanMessage = data.message.replace(/```json[\s\S]*?```/g, '').trim()
+      setMessages((prev) => [...prev, { role: 'assistant', content: cleanMessage }])
 
-      setProposal(data)
-      setStep('review')
-    } catch (err) {
-      console.error(err)
-      setError('AIの提案を取得できませんでした。もう一度お試しください。')
-      setStep('input')
+      if (data.proposal?.ready) {
+        setProposal(data.proposal)
+      }
+    } catch (error) {
+      console.error('Chat error:', error)
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: '申し訳ありません、エラーが発生しました。もう一度お試しください。' },
+      ])
+    } finally {
+      setIsLoading(false)
+      inputRef.current?.focus()
     }
   }
 
-  const handleRemoveKPI = (kpiId: string) => {
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSend()
+    }
+  }
+
+  const handleRemoveKPI = (kpiIndex: number) => {
     if (!proposal) return
     setProposal({
       ...proposal,
-      proposed_kpis: proposal.proposed_kpis.filter((k) => k.id !== kpiId),
+      proposed_kpis: proposal.proposed_kpis.filter((_, i) => i !== kpiIndex),
     })
   }
 
-  const handleRemoveAction = (kpiId: string, actionId: string) => {
+  const handleRemoveAction = (kpiIndex: number, actionIndex: number) => {
     if (!proposal) return
     setProposal({
       ...proposal,
-      proposed_kpis: proposal.proposed_kpis.map((kpi) =>
-        kpi.id === kpiId
-          ? { ...kpi, actions: kpi.actions.filter((a) => a.id !== actionId) }
+      proposed_kpis: proposal.proposed_kpis.map((kpi, i) =>
+        i === kpiIndex
+          ? { ...kpi, actions: kpi.actions.filter((_, j) => j !== actionIndex) }
           : kpi
       ),
     })
@@ -82,19 +126,23 @@ export default function NewGoalPage() {
   const handleSave = async () => {
     if (!proposal) return
 
-    setStep('saving')
+    setIsSaving(true)
 
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error('Not authenticated')
+
+      // 最初のユーザーメッセージを目標タイトルとして使用
+      const firstUserMessage = messages.find(m => m.role === 'user')?.content || '新しい目標'
+      const goalTitle = proposal.goal_analysis?.refined_title || firstUserMessage
 
       // 目標を作成
       const { data: goal, error: goalError } = await supabase
         .from('goals')
         .insert({
           user_id: user.id,
-          title: proposal.goal_analysis?.refined_title || title,
-          target_date: targetDate || null,
+          title: goalTitle,
+          target_date: null,
         })
         .select()
         .single()
@@ -108,7 +156,7 @@ export default function NewGoalPage() {
           .insert({
             goal_id: goal.id,
             title: kpi.title,
-            metric_type: kpi.metric_type,
+            metric_type: kpi.metric_type || 'number',
             target_value: kpi.target_value,
             unit: kpi.unit,
           })
@@ -117,12 +165,11 @@ export default function NewGoalPage() {
 
         if (kpiError) throw kpiError
 
-        // 行動を作成
         const actionsToInsert = kpi.actions.map((action) => ({
           kpi_id: kpiData.id,
           title: action.title,
-          action_type: action.action_type,
-          tracking_type: action.tracking_type,
+          action_type: action.action_type || 'daily',
+          tracking_type: action.tracking_type || 'checkbox',
           target_value: action.target_value,
           unit: action.unit,
         }))
@@ -135,246 +182,235 @@ export default function NewGoalPage() {
       }
 
       router.push('/dashboard')
-    } catch (err) {
-      console.error(err)
-      setError('保存に失敗しました。もう一度お試しください。')
-      setStep('review')
+    } catch (error) {
+      console.error('Save error:', error)
+      alert('保存に失敗しました。もう一度お試しください。')
+    } finally {
+      setIsSaving(false)
     }
   }
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen flex flex-col -mx-6 -my-8 px-6 py-4">
       {/* ヘッダー */}
-      <div className="flex items-center gap-4 mb-8">
+      <div className="flex items-center gap-4 mb-4">
         <Link href="/dashboard" className="p-2 -ml-2 rounded-full hover:bg-white/5">
           <ArrowLeft className="w-6 h-6" />
         </Link>
-        <h1 className="text-xl font-semibold">新しい目標</h1>
+        <h1 className="text-xl font-semibold">目標を設定</h1>
       </div>
 
-      <AnimatePresence mode="wait">
-        {/* Step 1: 入力 */}
-        {step === 'input' && (
-          <motion.div
-            key="input"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className="space-y-8"
-          >
-            <div className="space-y-6">
-              <div>
-                <h2 className="text-2xl font-bold mb-2">何を達成したい？</h2>
-                <p className="text-text-secondary">
-                  AIが具体的な行動に分解します
+      {/* チャットエリア */}
+      <div className="flex-1 overflow-y-auto space-y-4 pb-4 min-h-0">
+        <AnimatePresence mode="popLayout">
+          {messages.map((message, index) => (
+            <motion.div
+              key={index}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className={cn(
+                'flex',
+                message.role === 'user' ? 'justify-end' : 'justify-start'
+              )}
+            >
+              <div
+                className={cn(
+                  'max-w-[85%] rounded-2xl px-4 py-3',
+                  message.role === 'user'
+                    ? 'bg-accent text-white'
+                    : 'bg-bg-tertiary text-text-primary'
+                )}
+              >
+                <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                  {message.content}
                 </p>
               </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
 
-              <Input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="例: 英語を話せるようになりたい"
-                className="text-xl"
-              />
-
-              <Input
-                type="date"
-                label="いつまでに？（任意）"
-                value={targetDate}
-                onChange={(e) => setTargetDate(e.target.value)}
-              />
-
-              {error && (
-                <p className="text-error text-sm">{error}</p>
-              )}
+        {/* ローディング */}
+        {isLoading && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="flex justify-start"
+          >
+            <div className="bg-bg-tertiary rounded-2xl px-4 py-3">
+              <div className="flex gap-1">
+                {[0, 1, 2].map((i) => (
+                  <motion.div
+                    key={i}
+                    className="w-2 h-2 rounded-full bg-text-tertiary"
+                    animate={{ y: [0, -5, 0] }}
+                    transition={{ duration: 0.5, repeat: Infinity, delay: i * 0.15 }}
+                  />
+                ))}
+              </div>
             </div>
-
-            <Button
-              onClick={handleSubmitGoal}
-              disabled={!title.trim()}
-              fullWidth
-              size="lg"
-              className="gap-2"
-            >
-              <Sparkles className="w-5 h-5" />
-              AIに相談する
-            </Button>
           </motion.div>
         )}
 
-        {/* Step 2: ローディング */}
-        {step === 'loading' && (
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* 提案表示ボタン */}
+      {proposal && !showProposal && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-4"
+        >
+          <Button onClick={() => setShowProposal(true)} fullWidth>
+            提案を確認する
+          </Button>
+        </motion.div>
+      )}
+
+      {/* 提案モーダル */}
+      <AnimatePresence>
+        {showProposal && proposal && (
           <motion.div
-            key="loading"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="flex flex-col items-center justify-center py-20"
+            className="fixed inset-0 z-50 bg-black/80 flex items-end"
+            onClick={() => setShowProposal(false)}
           >
-            <div className="flex gap-2 mb-6">
-              {[0, 1, 2].map((i) => (
-                <motion.div
-                  key={i}
-                  className="w-3 h-3 rounded-full bg-accent"
-                  animate={{ y: [0, -10, 0] }}
-                  transition={{
-                    duration: 0.6,
-                    repeat: Infinity,
-                    delay: i * 0.15,
-                  }}
-                />
-              ))}
-            </div>
-            <p className="text-text-secondary">
-              あなたの目標を
-              <br />
-              分析しています...
-            </p>
-          </motion.div>
-        )}
-
-        {/* Step 3: レビュー */}
-        {(step === 'review' || step === 'saving') && proposal && (
-          <motion.div
-            key="review"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className="space-y-6"
-          >
-            {/* 目標分析 */}
-            {proposal.goal_analysis && !proposal.goal_analysis.is_smart && (
-              <Card className="border-l-4 border-warning">
-                <div className="flex items-start gap-3">
-                  <Sparkles className="w-5 h-5 text-warning shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-medium mb-2">提案があります</p>
-                    <ul className="text-sm text-text-secondary space-y-1">
-                      {proposal.goal_analysis.suggestions.map((s, i) => (
-                        <li key={i}>• {s}</li>
-                      ))}
-                    </ul>
-                  </div>
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', damping: 25 }}
+              className="w-full max-h-[85vh] bg-bg-primary rounded-t-3xl overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="p-6 overflow-y-auto max-h-[85vh]">
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-xl font-bold">提案されたKPIと行動</h2>
+                  <button
+                    onClick={() => setShowProposal(false)}
+                    className="p-2 rounded-full hover:bg-white/5"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
                 </div>
-              </Card>
-            )}
 
-            {/* KPI一覧 */}
-            <div className="space-y-4">
-              <h2 className="text-lg font-semibold">提案されたKPIと行動</h2>
+                {/* 目標サマリー */}
+                {proposal.goal_analysis && (
+                  <Card className="mb-4">
+                    <h3 className="font-semibold text-accent mb-2">
+                      {proposal.goal_analysis.refined_title}
+                    </h3>
+                    <p className="text-sm text-text-secondary">
+                      {proposal.goal_analysis.motivation}
+                    </p>
+                    {proposal.goal_analysis.timeline && (
+                      <p className="text-xs text-text-tertiary mt-2">
+                        期限: {proposal.goal_analysis.timeline}
+                      </p>
+                    )}
+                  </Card>
+                )}
 
-              {proposal.proposed_kpis.map((kpi) => (
-                <KPICard
-                  key={kpi.id}
-                  kpi={kpi}
-                  isEditing={editingKPI === kpi.id}
-                  onEdit={() => setEditingKPI(editingKPI === kpi.id ? null : kpi.id!)}
-                  onRemove={() => handleRemoveKPI(kpi.id!)}
-                  onRemoveAction={(actionId) => handleRemoveAction(kpi.id!, actionId)}
-                />
-              ))}
-            </div>
+                {/* KPI一覧 */}
+                <div className="space-y-4 mb-6">
+                  {proposal.proposed_kpis.map((kpi, kpiIndex) => (
+                    <Card key={kpiIndex}>
+                      <div className="flex items-start justify-between gap-2 mb-3">
+                        <div>
+                          <span className="text-xs text-accent font-medium">KPI {kpiIndex + 1}</span>
+                          <h4 className="font-semibold">{kpi.title}</h4>
+                          {kpi.target_value && (
+                            <p className="text-sm text-text-secondary">
+                              目標: {kpi.target_value} {kpi.unit}
+                            </p>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleRemoveKPI(kpiIndex)}
+                          className="p-1 rounded hover:bg-white/5 text-text-tertiary"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
 
-            {error && (
-              <p className="text-error text-sm">{error}</p>
-            )}
+                      <div className="space-y-2">
+                        {kpi.actions.map((action, actionIndex) => (
+                          <div
+                            key={actionIndex}
+                            className="flex items-center justify-between gap-2 py-2 px-3 rounded-lg bg-bg-elevated"
+                          >
+                            <div className="flex items-center gap-2">
+                              <Check className="w-4 h-4 text-accent" />
+                              <div>
+                                <p className="text-sm">{action.title}</p>
+                                <p className="text-xs text-text-tertiary">
+                                  {action.action_type === 'daily' ? '毎日' : action.action_type === 'weekly' ? '毎週' : '一度'}
+                                  {action.target_value && ` • ${action.target_value}${action.unit}`}
+                                </p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleRemoveAction(kpiIndex, actionIndex)}
+                              className="p-1 rounded hover:bg-white/5 text-text-tertiary"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </Card>
+                  ))}
+                </div>
 
-            <div className="pt-4 space-y-3">
-              <Button
-                onClick={handleSave}
-                isLoading={step === 'saving'}
-                fullWidth
-                size="lg"
-              >
-                この内容で始める
-              </Button>
-              <Button
-                onClick={() => setStep('input')}
-                variant="ghost"
-                fullWidth
-                disabled={step === 'saving'}
-              >
-                目標を修正する
-              </Button>
-            </div>
+                {/* アクションボタン */}
+                <div className="space-y-3 pb-6">
+                  <Button
+                    onClick={handleSave}
+                    isLoading={isSaving}
+                    fullWidth
+                    size="lg"
+                  >
+                    この内容で始める
+                  </Button>
+                  <Button
+                    onClick={() => setShowProposal(false)}
+                    variant="ghost"
+                    fullWidth
+                  >
+                    会話を続ける
+                  </Button>
+                </div>
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* 入力エリア */}
+      <div className="pt-4 pb-2 bg-bg-primary">
+        <div className="flex gap-2">
+          <input
+            ref={inputRef}
+            type="text"
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder="メッセージを入力..."
+            disabled={isLoading}
+            className="flex-1 bg-bg-tertiary text-text-primary rounded-full px-5 py-3 focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+          />
+          <button
+            onClick={handleSend}
+            disabled={!inputValue.trim() || isLoading}
+            className="w-12 h-12 rounded-full bg-accent flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed hover:bg-accent-light transition-colors"
+          >
+            <Send className="w-5 h-5 text-white" />
+          </button>
+        </div>
+      </div>
     </div>
-  )
-}
-
-function KPICard({
-  kpi,
-  isEditing,
-  onEdit,
-  onRemove,
-  onRemoveAction,
-}: {
-  kpi: ProposedKPI
-  isEditing: boolean
-  onEdit: () => void
-  onRemove: () => void
-  onRemoveAction: (actionId: string) => void
-}) {
-  return (
-    <Card className="overflow-hidden">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <span className="text-xs text-accent font-medium">KPI</span>
-          <h3 className="font-semibold text-lg">{kpi.title}</h3>
-          {kpi.target_value && (
-            <p className="text-sm text-text-secondary">
-              目標: {kpi.target_value} {kpi.unit}
-            </p>
-          )}
-        </div>
-        <div className="flex gap-1">
-          <button
-            onClick={onEdit}
-            className="p-2 rounded-lg hover:bg-white/5 text-text-secondary"
-          >
-            <Edit2 className="w-4 h-4" />
-          </button>
-          <button
-            onClick={onRemove}
-            className="p-2 rounded-lg hover:bg-white/5 text-text-secondary"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-
-      <div className="mt-4 pt-4 border-t border-white/5 space-y-2">
-        {kpi.actions.map((action) => (
-          <div
-            key={action.id}
-            className={cn(
-              'flex items-center justify-between gap-3 py-2 px-3 rounded-lg bg-bg-elevated',
-              isEditing && 'pr-2'
-            )}
-          >
-            <div className="flex items-center gap-3">
-              <Check className="w-4 h-4 text-accent" />
-              <div>
-                <p className="text-sm">{action.title}</p>
-                <p className="text-xs text-text-tertiary">
-                  {action.action_type === 'daily' ? '毎日' : action.action_type === 'weekly' ? '毎週' : '一度'}
-                  {action.target_value && ` • ${action.target_value}${action.unit}`}
-                </p>
-              </div>
-            </div>
-            {isEditing && (
-              <button
-                onClick={() => onRemoveAction(action.id!)}
-                className="p-1 rounded hover:bg-white/5 text-text-tertiary"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
-    </Card>
   )
 }
