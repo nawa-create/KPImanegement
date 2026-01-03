@@ -34,7 +34,9 @@ export async function callClaude(
   })
 
   if (!response.ok) {
-    throw new Error(`Claude API error: ${response.status}`)
+    const errorBody = await response.text()
+    console.error('Claude API Error Body:', errorBody)
+    throw new Error(`Claude API error: ${response.status} - ${errorBody}`)
   }
 
   const data: ClaudeResponse = await response.json()
